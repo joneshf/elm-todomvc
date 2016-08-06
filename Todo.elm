@@ -16,23 +16,24 @@ import Html.App as App
 import Html.Attributes exposing (..)
 import Html.Events exposing (..)
 import Html.Keyed as Keyed
-import Html.Lazy exposing (lazy, lazy2)
+import Html.Lazy exposing (lazy, lazy2, lazy3)
+import Dict as Dict exposing (Dict)
 import Json.Decode as Json
 import String
 
 
 
-main : Program (Maybe Model)
+main : Program (Maybe StorageModel)
 main =
   App.programWithFlags
-    { init = init
+    { init = \storageModel -> init (Maybe.andThen storageModel egarots)
     , view = view
     , update = updateWithStorage
     , subscriptions = \_ -> Sub.none
     }
 
 
-port setStorage : Model -> Cmd msg
+port setStorage : StorageModel -> Cmd msg
 
 port focus : String -> Cmd msg
 
@@ -47,7 +48,7 @@ updateWithStorage msg model =
       update msg model
   in
     ( newModel
-    , Cmd.batch [ setStorage newModel, cmds ]
+    , Cmd.batch [ setStorage (storage newModel), cmds ]
     )
 
 
@@ -56,45 +57,127 @@ updateWithStorage msg model =
 
 
 -- The full application state of our todo app.
-type alias Model =
-    { entries : List Entry
+type alias BaseModel entries visibility =
+    { active : entries
+    , completed : entries
     , field : String
     , uid : Int
-    , visibility : String
+    , visibility : visibility
     }
 
+type alias StorageModel =
+    BaseModel (List (Int, StorageEntry)) String
+
+type alias Model =
+    BaseModel (Dict Int Entry) Visibility
+
+
+type alias StorageEntry =
+    { description : String
+    , editing : Bool
+    }
 
 type alias Entry =
-    { description : String
-    , completed : Bool
-    , editing : Bool
-    , id : Int
-    }
+  BaseEntry StorageEntry
 
+type BaseEntry a
+  = Active a
+  | Completed a
+
+type Visibility
+  = AllEntries
+  | ActiveEntries
+  | CompletedEntries
 
 emptyModel : Model
 emptyModel =
-  { entries = []
-  , visibility = "All"
+  { active = Dict.empty
+  , completed = Dict.empty
+  , visibility = AllEntries
   , field = ""
   , uid = 0
   }
 
+baseEntryExtract : BaseEntry a -> a
+baseEntryExtract base =
+  case base of
+    Active a ->
+      a
+    Completed a ->
+      a
 
-newEntry : String -> Int -> Entry
-newEntry desc id =
-  { description = desc
-  , completed = False
-  , editing = False
-  , id = id
-  }
+newEntry : String -> Entry
+newEntry desc =
+  Active
+    { description = desc
+    , editing = False
+    }
 
+setEditing : Bool -> Entry -> Entry
+setEditing editing entry =
+  case entry of
+    Active storageEntry ->
+      Active {storageEntry | editing = editing}
+    Completed storageEntry ->
+      Completed {storageEntry | editing = editing}
+
+setDescription : String -> Entry -> Entry
+setDescription description entry =
+  case entry of
+    Active storageEntry ->
+      Active {storageEntry | description = description}
+    Completed storageEntry ->
+      Completed {storageEntry | description = description}
 
 init : Maybe Model -> ( Model, Cmd Msg )
 init savedModel =
   Maybe.withDefault emptyModel savedModel ! []
 
+storage
+  :  BaseModel (Dict  comparable (BaseEntry a)) Visibility
+  -> BaseModel (List (comparable,           a)) String
+storage ({active, completed, visibility} as model) =
+  { model
+  | visibility = visibilityString visibility
+  , active = Dict.map (\_ -> baseEntryExtract) active |> Dict.toList
+  , completed = Dict.map (\_ -> baseEntryExtract) completed |> Dict.toList
+  }
 
+egarots
+  :         BaseModel (List (comparable,            a)) String
+  -> Maybe (BaseModel (Dict  comparable  (BaseEntry a)) Visibility)
+egarots ({active, completed, visibility} as model) =
+  let
+    go v =
+      { model
+      | visibility = v
+      , active = Dict.fromList active |> Dict.map (\_ -> Active)
+      , completed = Dict.fromList completed |> Dict.map (\_ -> Completed)
+      }
+  in
+    Maybe.map go (parseVisibility visibility)
+
+parseVisibility : String -> Maybe Visibility
+parseVisibility str =
+  case str of
+    "All" ->
+      Just AllEntries
+    "Active" ->
+      Just ActiveEntries
+    "Completed" ->
+      Just CompletedEntries
+    _ ->
+      Nothing
+
+visibilityString : Visibility -> String
+visibilityString visibility =
+  case visibility of
+    AllEntries ->
+      "All"
+    ActiveEntries ->
+      "Active"
+    CompletedEntries ->
+      "Completed"
 
 -- UPDATE
 
@@ -113,7 +196,7 @@ type Msg
     | DeleteComplete
     | Check Int Bool
     | CheckAll Bool
-    | ChangeVisibility String
+    | ChangeVisibility Visibility
 
 
 -- How we update our Model on a given Msg?
@@ -127,11 +210,8 @@ update msg model =
       { model
         | uid = model.uid + 1
         , field = ""
-        , entries =
-            if String.isEmpty model.field then
-              model.entries
-            else
-              model.entries ++ [newEntry model.field model.uid]
+        , active =
+            Dict.insert model.uid (newEntry model.field) model.active
       }
         ! []
 
@@ -140,44 +220,65 @@ update msg model =
         ! []
 
     EditingEntry id isEditing ->
-      let
-        updateEntry t =
-          if t.id == id then { t | editing = isEditing } else t
-      in
-        { model | entries = List.map updateEntry model.entries }
-          ! [ focus ("#todo-" ++ toString id) ]
+      { model
+        | active = Dict.update id (Maybe.map (setEditing isEditing)) model.active
+        , completed = Dict.update id (Maybe.map (setEditing isEditing)) model.completed
+      }
+        ! [ focus ("#todo-" ++ toString id) ]
 
     UpdateEntry id task ->
-      let
-        updateEntry t =
-          if t.id == id then { t | description = task } else t
-      in
-        { model | entries = List.map updateEntry model.entries }
-          ! []
+      { model
+        | active = Dict.update id (Maybe.map (setDescription task)) model.active
+        , completed = Dict.update id (Maybe.map (setDescription task)) model.completed
+      }
+        ! []
 
     Delete id ->
-      { model | entries = List.filter (\t -> t.id /= id) model.entries }
+      { model
+        | active = Dict.remove id model.active
+        , completed = Dict.remove id model.completed
+      }
         ! []
 
     DeleteComplete ->
-      { model | entries = List.filter (not << .completed) model.entries }
+      { model | completed = Dict.empty }
         ! []
 
-    Check id isCompleted ->
+    Check id True ->
       let
-        updateEntry t =
-          if t.id == id then { t | completed = isCompleted } else t
+        entry =
+          Maybe.map (Dict.singleton id) (Dict.get id model.active)
       in
-        { model | entries = List.map updateEntry model.entries }
+        { model
+          | active = Dict.remove id model.active
+          , completed = Dict.union (Maybe.withDefault Dict.empty entry) model.completed
+        }
           ! []
 
-    CheckAll isCompleted ->
+    Check id False ->
       let
-        updateEntry t =
-          { t | completed = isCompleted }
+        entry =
+          Maybe.map (Dict.singleton id) (Dict.get id model.completed)
       in
-        { model | entries = List.map updateEntry model.entries }
+        { model
+          | active = Dict.union (Maybe.withDefault Dict.empty entry) model.active
+          , completed = Dict.remove id model.completed
+        }
           ! []
+
+    CheckAll True ->
+      { model
+        | active = Dict.empty
+        , completed = Dict.union model.active model.completed
+      }
+        ! []
+
+    CheckAll False ->
+      { model
+        | active = Dict.union model.active model.completed
+        , completed = Dict.empty
+      }
+        ! []
 
     ChangeVisibility visibility ->
       { model | visibility = visibility }
@@ -197,8 +298,8 @@ view model =
     [ section
         [ class "todoapp" ]
         [ lazy viewInput model.field
-        , lazy2 viewEntries model.visibility model.entries
-        , lazy2 viewControls model.visibility model.entries
+        , lazy3 viewEntries model.visibility model.active model.completed
+        , lazy3 viewControls model.visibility model.active model.completed
         ]
     , infoFooter
     ]
@@ -216,7 +317,7 @@ viewInput task =
         , value task
         , name "newTodo"
         , onInput UpdateField
-        , onEnter Add
+        , onEnter (if String.isEmpty task then NoOp else Add)
         ]
         []
     ]
@@ -235,20 +336,23 @@ onEnter msg =
 -- VIEW ALL ENTRIES
 
 
-viewEntries : String -> List Entry -> Html Msg
-viewEntries visibility entries =
+viewEntries : Visibility -> Dict Int Entry -> Dict Int Entry -> Html Msg
+viewEntries visibility active completed =
   let
-    isVisible todo =
+    visible =
       case visibility of
-        "Completed" -> todo.completed
-        "Active" -> not todo.completed
-        _ -> True
+        CompletedEntries -> Dict.map (lazy2 viewEntry) completed
+        ActiveEntries -> Dict.map (lazy2 viewEntry) active
+        AllEntries -> Dict.union (Dict.map (lazy2 viewEntry) active) (Dict.map (lazy2 viewEntry) completed)
 
     allCompleted =
-      List.all .completed entries
+      Dict.isEmpty active
 
     cssVisibility =
-      if List.isEmpty entries then "hidden" else "visible"
+      if Dict.isEmpty active && Dict.isEmpty completed then
+        "hidden"
+      else
+        "visible"
   in
     section
       [ class "main"
@@ -266,38 +370,48 @@ viewEntries visibility entries =
           [ for "toggle-all" ]
           [ text "Mark all as complete" ]
       , Keyed.ul [ class "todo-list" ] <|
-          List.map viewKeyedEntry (List.filter isVisible entries)
+          viewKeyedEntries visible
       ]
 
+dictAll : (b -> Bool) -> Dict comparable b -> Bool
+dictAll p =
+  Dict.foldl (\_ b acc -> acc && p b) True
 
 
 -- VIEW INDIVIDUAL ENTRIES
 
 
-viewKeyedEntry : Entry -> (String, Html Msg)
-viewKeyedEntry todo =
-  ( toString todo.id, lazy viewEntry todo )
+viewKeyedEntries : Dict Int a -> List (String, a)
+viewKeyedEntries =
+  Dict.foldr (\id todo -> (::) (toString id, todo)) []
 
+viewEntry : Int -> Entry -> Html Msg
+viewEntry todoId entry =
+  case entry of
+    Active todo ->
+      viewEntry' False todoId todo
+    Completed todo ->
+      viewEntry' True todoId todo
 
-viewEntry : Entry -> Html Msg
-viewEntry todo =
+viewEntry' : Bool -> Int -> StorageEntry -> Html Msg
+viewEntry' bool todoId todo =
   li
-    [ classList [ ("completed", todo.completed), ("editing", todo.editing) ] ]
+    [ classList [ ("completed", bool), ("editing", todo.editing) ] ]
     [ div
         [ class "view" ]
         [ input
             [ class "toggle"
             , type' "checkbox"
-            , checked todo.completed
-            , onClick (Check todo.id (not todo.completed))
+            , checked bool
+            , onClick (Check todoId (not bool))
             ]
             []
         , label
-            [ onDoubleClick (EditingEntry todo.id True) ]
+            [ onDoubleClick (EditingEntry todoId bool) ]
             [ text todo.description ]
         , button
             [ class "destroy"
-            , onClick (Delete todo.id)
+            , onClick (Delete todoId)
             ]
             []
         ]
@@ -305,10 +419,10 @@ viewEntry todo =
         [ class "edit"
         , value todo.description
         , name "title"
-        , id ("todo-" ++ toString todo.id)
-        , onInput (UpdateEntry todo.id)
-        , onBlur (EditingEntry todo.id False)
-        , onEnter (EditingEntry todo.id False)
+        , id ("todo-" ++ toString todoId)
+        , onInput (UpdateEntry todoId)
+        , onBlur (EditingEntry todoId False)
+        , onEnter (EditingEntry todoId False)
         ]
         []
     ]
@@ -318,23 +432,16 @@ viewEntry todo =
 -- VIEW CONTROLS AND FOOTER
 
 
-viewControls : String -> List Entry -> Html Msg
-viewControls visibility entries =
-  let
-    entriesCompleted =
-      List.length (List.filter .completed entries)
-
-    entriesLeft =
-      List.length entries - entriesCompleted
-  in
-    footer
-      [ class "footer"
-      , hidden (List.isEmpty entries)
-      ]
-      [ lazy viewControlsCount entriesLeft
-      , lazy viewControlsFilters visibility
-      , lazy viewControlsClear entriesCompleted
-      ]
+viewControls : Visibility -> Dict Int Entry -> Dict Int Entry -> Html Msg
+viewControls visibility active completed =
+  footer
+    [ class "footer"
+    , hidden (Dict.isEmpty active && Dict.isEmpty completed)
+    ]
+    [ lazy viewControlsCount (Dict.size active)
+    , lazy viewControlsFilters visibility
+    , lazy viewControlsClear (Dict.size completed)
+    ]
 
 
 viewControlsCount : Int -> Html Msg
@@ -350,24 +457,24 @@ viewControlsCount entriesLeft =
       ]
 
 
-viewControlsFilters : String -> Html Msg
+viewControlsFilters : Visibility -> Html Msg
 viewControlsFilters visibility =
   ul
     [ class "filters" ]
-    [ visibilitySwap "#/" "All" visibility
+    [ visibilitySwap "#/" AllEntries visibility
     , text " "
-    , visibilitySwap "#/active" "Active" visibility
+    , visibilitySwap "#/active" ActiveEntries visibility
     , text " "
-    , visibilitySwap "#/completed" "Completed" visibility
+    , visibilitySwap "#/completed" CompletedEntries visibility
     ]
 
 
-visibilitySwap : String -> String -> String -> Html Msg
+visibilitySwap : String -> Visibility -> Visibility -> Html Msg
 visibilitySwap uri visibility actualVisibility =
   li
     [ onClick (ChangeVisibility visibility) ]
     [ a [ href uri, classList [("selected", visibility == actualVisibility)] ]
-        [ text visibility ]
+        [ text (visibilityString visibility) ]
     ]
 
 
