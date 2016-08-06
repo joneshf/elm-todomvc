@@ -57,19 +57,19 @@ updateWithStorage msg model =
 
 
 -- The full application state of our todo app.
-type alias BaseModel entries visibility =
-    { active : entries
-    , completed : entries
+type alias BaseModel active completed visibility =
+    { active : active
+    , completed : completed
     , field : String
     , uid : Int
     , visibility : visibility
     }
 
 type alias StorageModel =
-    BaseModel (List (Int, StorageEntry)) String
+    BaseModel (List (Int, StorageEntry)) (List (Int, StorageEntry)) String
 
 type alias Model =
-    BaseModel (Dict Int Entry) Visibility
+    BaseModel (Dict Int (Entry Active)) (Dict Int (Entry Completed)) Visibility
 
 
 type alias StorageEntry =
@@ -77,12 +77,14 @@ type alias StorageEntry =
     , editing : Bool
     }
 
-type alias Entry =
-  BaseEntry StorageEntry
+type alias Entry state =
+  Tagged state StorageEntry
 
-type BaseEntry a
-  = Active a
-  | Completed a
+type Active
+  = Active
+
+type Completed
+  = Completed
 
 type Visibility
   = AllEntries
@@ -98,28 +100,24 @@ emptyModel =
   , uid = 0
   }
 
-baseEntryMap : (a -> b) -> BaseEntry a -> BaseEntry b
-baseEntryMap f base =
-  case base of
-    Active a ->
-      Active (f a)
-    Completed a ->
-      Completed (f a)
-
-baseEntryExtract : BaseEntry a -> a
-baseEntryExtract base =
-  case base of
-    Active a ->
-      a
-    Completed a ->
-      a
-
-newEntry : String -> Entry
+newEntry : String -> Entry Active
 newEntry desc =
-  Active
+  entry
     { description = desc
     , editing = False
     }
+
+entry : StorageEntry -> Entry a
+entry =
+  Tagged
+
+setEntryEditing : Bool -> Entry a -> Entry a
+setEntryEditing =
+  taggedMap << setEditing
+
+setEntryDescription : String -> Entry a -> Entry a
+setEntryDescription =
+  taggedMap << setDescription
 
 setEditing : a -> {r | editing : b} -> {r | editing : a}
 setEditing editing record =
@@ -134,25 +132,25 @@ init savedModel =
   Maybe.withDefault emptyModel savedModel ! []
 
 storage
-  :  BaseModel (Dict  comparable (BaseEntry a)) Visibility
-  -> BaseModel (List (comparable,           a)) String
+  :  BaseModel (Dict  comparable      (Entry a)) (Dict  comparable      (Entry b)) Visibility
+  -> BaseModel (List (comparable, StorageEntry)) (List (comparable, StorageEntry)) String
 storage ({active, completed, visibility} as model) =
   { model
   | visibility = visibilityString visibility
-  , active = Dict.map (\_ -> baseEntryExtract) active |> Dict.toList
-  , completed = Dict.map (\_ -> baseEntryExtract) completed |> Dict.toList
+  , active = Dict.map (\_ -> taggedExtract) active |> Dict.toList
+  , completed = Dict.map (\_ -> taggedExtract) completed |> Dict.toList
   }
 
 egarots
-  :         BaseModel (List (comparable,            a)) String
-  -> Maybe (BaseModel (Dict  comparable  (BaseEntry a)) Visibility)
+  :         BaseModel (List (comparable, StorageEntry)) (List (comparable, StorageEntry)) String
+  -> Maybe (BaseModel (Dict  comparable      (Entry a)) (Dict  comparable      (Entry b)) Visibility)
 egarots ({active, completed, visibility} as model) =
   let
     go v =
       { model
       | visibility = v
-      , active = Dict.fromList active |> Dict.map (\_ -> Active)
-      , completed = Dict.fromList completed |> Dict.map (\_ -> Completed)
+      , active = Dict.fromList active |> Dict.map (\_ -> entry)
+      , completed = Dict.fromList completed |> Dict.map (\_ -> entry)
       }
   in
     Maybe.map go (parseVisibility visibility)
@@ -178,6 +176,27 @@ visibilityString visibility =
       "Active"
     CompletedEntries ->
       "Completed"
+
+type Tagged tag value
+  = Tagged value
+
+retag : Tagged oldTag value -> Tagged newTag value
+retag tagged =
+  case tagged of
+    Tagged x ->
+      Tagged x
+
+taggedMap : (oldValue -> newValue) -> Tagged tag oldValue -> Tagged tag newValue
+taggedMap f entry =
+  case entry of
+    Tagged todo ->
+      Tagged (f todo)
+
+taggedExtract : Tagged tag value -> value
+taggedExtract entry =
+  case entry of
+    Tagged a ->
+      a
 
 -- UPDATE
 
@@ -221,15 +240,15 @@ update msg model =
 
     EditingEntry id isEditing ->
       { model
-        | active = Dict.update id (Maybe.map (baseEntryMap (setEditing isEditing))) model.active
-        , completed = Dict.update id (Maybe.map (baseEntryMap (setEditing isEditing))) model.completed
+        | active = Dict.update id (Maybe.map (setEntryEditing isEditing)) model.active
+        , completed = Dict.update id (Maybe.map (setEntryEditing isEditing)) model.completed
       }
         ! [ focus ("#todo-" ++ toString id) ]
 
     UpdateEntry id task ->
       { model
-        | active = Dict.update id (Maybe.map (baseEntryMap (setDescription task))) model.active
-        , completed = Dict.update id (Maybe.map (baseEntryMap (setDescription task))) model.completed
+        | active = Dict.update id (Maybe.map (setEntryDescription task)) model.active
+        , completed = Dict.update id (Maybe.map (setEntryDescription task)) model.completed
       }
         ! []
 
@@ -247,7 +266,7 @@ update msg model =
     Check id True ->
       let
         entry =
-          Maybe.map (Dict.singleton id << Completed << baseEntryExtract) (Dict.get id model.active)
+          Maybe.map (Dict.singleton id << retag) (Dict.get id model.active)
       in
         { model
           | active = Dict.remove id model.active
@@ -258,7 +277,7 @@ update msg model =
     Check id False ->
       let
         entry =
-          Maybe.map (Dict.singleton id << Active << baseEntryExtract) (Dict.get id model.completed)
+          Maybe.map (Dict.singleton id << retag) (Dict.get id model.completed)
       in
         { model
           | active = Dict.union (Maybe.withDefault Dict.empty entry) model.active
@@ -269,13 +288,13 @@ update msg model =
     CheckAll True ->
       { model
         | active = Dict.empty
-        , completed = Dict.union (Dict.map (\_ -> Completed << baseEntryExtract) model.active) model.completed
+        , completed = Dict.union (Dict.map (\_ -> retag) model.active) model.completed
       }
         ! []
 
     CheckAll False ->
       { model
-        | active = Dict.union model.active (Dict.map (\_ -> Active << baseEntryExtract) model.completed)
+        | active = Dict.union model.active (Dict.map (\_ -> retag) model.completed)
         , completed = Dict.empty
       }
         ! []
@@ -336,14 +355,17 @@ onEnter msg =
 -- VIEW ALL ENTRIES
 
 
-viewEntries : Visibility -> Dict Int Entry -> Dict Int Entry -> Html Msg
+viewEntries : Visibility -> Dict Int (Entry Active) -> Dict Int (Entry Completed) -> Html Msg
 viewEntries visibility active completed =
   let
     visible =
       case visibility of
-        CompletedEntries -> Dict.map (lazy2 viewEntry) completed
-        ActiveEntries -> Dict.map (lazy2 viewEntry) active
-        AllEntries -> Dict.union (Dict.map (lazy2 viewEntry) active) (Dict.map (lazy2 viewEntry) completed)
+        CompletedEntries ->
+          Dict.map (lazy2 viewCompleted) completed
+        ActiveEntries ->
+          Dict.map (lazy2 viewActive) active
+        AllEntries ->
+          Dict.union (Dict.map (lazy2 viewActive) active) (Dict.map (lazy2 viewCompleted) completed)
 
     allCompleted =
       Dict.isEmpty active
@@ -373,10 +395,6 @@ viewEntries visibility active completed =
           viewKeyedEntries visible
       ]
 
-dictAll : (b -> Bool) -> Dict comparable b -> Bool
-dictAll p =
-  Dict.foldl (\_ b acc -> acc && p b) True
-
 
 -- VIEW INDIVIDUAL ENTRIES
 
@@ -385,16 +403,16 @@ viewKeyedEntries : Dict Int a -> List (String, a)
 viewKeyedEntries =
   Dict.foldr (\id todo -> (::) (toString id, todo)) []
 
-viewEntry : Int -> Entry -> Html Msg
-viewEntry todoId entry =
-  case entry of
-    Active todo ->
-      viewEntry' False todoId todo
-    Completed todo ->
-      viewEntry' True todoId todo
+viewActive : Int -> Entry Active -> Html Msg
+viewActive id =
+  viewEntry False id << taggedExtract
 
-viewEntry' : Bool -> Int -> StorageEntry -> Html Msg
-viewEntry' bool todoId todo =
+viewCompleted : Int -> Entry Completed -> Html Msg
+viewCompleted id =
+  viewEntry True id << taggedExtract
+
+viewEntry : Bool -> Int -> StorageEntry -> Html Msg
+viewEntry bool todoId todo =
   li
     [ classList [ ("completed", bool), ("editing", todo.editing) ] ]
     [ div
@@ -432,7 +450,7 @@ viewEntry' bool todoId todo =
 -- VIEW CONTROLS AND FOOTER
 
 
-viewControls : Visibility -> Dict Int Entry -> Dict Int Entry -> Html Msg
+viewControls : Visibility -> Dict a (Entry Active) -> Dict c (Entry Completed) -> Html Msg
 viewControls visibility active completed =
   footer
     [ class "footer"
