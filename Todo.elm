@@ -98,6 +98,14 @@ emptyModel =
   , uid = 0
   }
 
+baseEntryMap : (a -> b) -> BaseEntry a -> BaseEntry b
+baseEntryMap f base =
+  case base of
+    Active a ->
+      Active (f a)
+    Completed a ->
+      Completed (f a)
+
 baseEntryExtract : BaseEntry a -> a
 baseEntryExtract base =
   case base of
@@ -113,21 +121,13 @@ newEntry desc =
     , editing = False
     }
 
-setEditing : Bool -> Entry -> Entry
-setEditing editing entry =
-  case entry of
-    Active storageEntry ->
-      Active {storageEntry | editing = editing}
-    Completed storageEntry ->
-      Completed {storageEntry | editing = editing}
+setEditing : a -> {r | editing : b} -> {r | editing : a}
+setEditing editing record =
+  {record | editing = editing}
 
-setDescription : String -> Entry -> Entry
-setDescription description entry =
-  case entry of
-    Active storageEntry ->
-      Active {storageEntry | description = description}
-    Completed storageEntry ->
-      Completed {storageEntry | description = description}
+setDescription : a -> {r | description : b} -> {r | description : a}
+setDescription description record =
+  {record | description = description}
 
 init : Maybe Model -> ( Model, Cmd Msg )
 init savedModel =
@@ -221,15 +221,15 @@ update msg model =
 
     EditingEntry id isEditing ->
       { model
-        | active = Dict.update id (Maybe.map (setEditing isEditing)) model.active
-        , completed = Dict.update id (Maybe.map (setEditing isEditing)) model.completed
+        | active = Dict.update id (Maybe.map (baseEntryMap (setEditing isEditing))) model.active
+        , completed = Dict.update id (Maybe.map (baseEntryMap (setEditing isEditing))) model.completed
       }
         ! [ focus ("#todo-" ++ toString id) ]
 
     UpdateEntry id task ->
       { model
-        | active = Dict.update id (Maybe.map (setDescription task)) model.active
-        , completed = Dict.update id (Maybe.map (setDescription task)) model.completed
+        | active = Dict.update id (Maybe.map (baseEntryMap (setDescription task))) model.active
+        , completed = Dict.update id (Maybe.map (baseEntryMap (setDescription task))) model.completed
       }
         ! []
 
@@ -247,7 +247,7 @@ update msg model =
     Check id True ->
       let
         entry =
-          Maybe.map (Dict.singleton id) (Dict.get id model.active)
+          Maybe.map (Dict.singleton id << Completed << baseEntryExtract) (Dict.get id model.active)
       in
         { model
           | active = Dict.remove id model.active
@@ -258,7 +258,7 @@ update msg model =
     Check id False ->
       let
         entry =
-          Maybe.map (Dict.singleton id) (Dict.get id model.completed)
+          Maybe.map (Dict.singleton id << Active << baseEntryExtract) (Dict.get id model.completed)
       in
         { model
           | active = Dict.union (Maybe.withDefault Dict.empty entry) model.active
@@ -269,13 +269,13 @@ update msg model =
     CheckAll True ->
       { model
         | active = Dict.empty
-        , completed = Dict.union model.active model.completed
+        , completed = Dict.union (Dict.map (\_ -> Completed << baseEntryExtract) model.active) model.completed
       }
         ! []
 
     CheckAll False ->
       { model
-        | active = Dict.union model.active model.completed
+        | active = Dict.union model.active (Dict.map (\_ -> Active << baseEntryExtract) model.completed)
         , completed = Dict.empty
       }
         ! []
