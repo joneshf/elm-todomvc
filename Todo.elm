@@ -469,12 +469,18 @@ viewEntry bool todoId todo =
         , name "title"
         , id ("todo-" ++ toString todoId)
         , on "blur" (Json.map (UpdateEntry todoId) targetValue)
-        , on "keydown" (Json.object2 (whenEnter << UpdateEntry todoId) targetValue keyCode)
+        , on "keydown"(Json.object2 (\value keyCode ->
+            case keyCode of
+              13 ->
+                UpdateEntry todoId value
+              27 ->
+                UpdateEntry todoId (string todo.description)
+              _ ->
+                NoOp
+          ) targetValue keyCode)
         ]
         []
     ]
-
-
 
 -- VIEW CONTROLS AND FOOTER
 
