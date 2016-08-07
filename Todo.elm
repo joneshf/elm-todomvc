@@ -21,6 +21,7 @@ import Dict as Dict exposing (Dict)
 import Json.Decode as Json
 import String
 
+import Tagged exposing (Tagged, retag, tag, untag)
 import These exposing (These(..), these)
 
 main : Program (Maybe StorageModel)
@@ -136,15 +137,15 @@ newEntry =
 entry : String -> Maybe (Entry a)
 entry title =
   nonBlankString title
-    |> Maybe.map (\str -> Tagged {description = str, editing = False})
+    |> Maybe.map (\str -> tag {description = str, editing = False})
 
 setEntryEditing : Bool -> Entry a -> Entry a
 setEntryEditing editing =
-  taggedMap (\record -> {record | editing = editing})
+  Tagged.map (\record -> {record | editing = editing})
 
 setEntryDescription : String -> Entry a -> Maybe (Entry a)
 setEntryDescription str entry =
-  Maybe.map (\non -> taggedMap (setDescription non) entry) (nonBlankString str)
+  Maybe.map (\non -> Tagged.map (setDescription non) entry) (nonBlankString str)
 
 setDescription : a -> {r | description : b} -> {r | description : a}
 setDescription x record =
@@ -203,25 +204,6 @@ nonBlankString rawString =
 string : NonBlankString -> String
 string (NonBlankString str) =
   str
-
-type Tagged tag value
-  = Tagged value
-
-retag : Tagged oldTag value -> Tagged newTag value
-retag (Tagged x) =
-  Tagged x
-
-taggedMap : (oldValue -> newValue) -> Tagged tag oldValue -> Tagged tag newValue
-taggedMap f entry =
-  case entry of
-    Tagged todo ->
-      Tagged (f todo)
-
-untag : Tagged tag value -> value
-untag entry =
-  case entry of
-    Tagged a ->
-      a
 
 -- UPDATE
 
