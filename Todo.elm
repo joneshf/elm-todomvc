@@ -20,168 +20,33 @@ import Html.Lazy exposing (lazy, lazy2, lazy3)
 import Dict as Dict exposing (Dict)
 import Json.Decode as Json
 
-import NonBlankString exposing (NonBlankString, nonBlankString)
-import Tagged exposing (Tagged, retag, tag, untag)
-import These exposing (These(..), these)
+import Model exposing
+  ( BaseEntry, Entry, Model
+  , dependentFields, newEntry, setDescription, setEditing
+  )
+import NonBlankString
+import Storage exposing (storage, egarots)
+import Tagged exposing (retag, untag)
+import These exposing (these)
 import Visibility exposing (Visibility, Active, Completed, all, active, completed)
 
-main : Program (Maybe StorageModel)
+main : Program (Maybe Storage.Model)
 main =
   App.programWithFlags
-    { init = init << Maybe.map egarots
+    { init = init
     , view = view
     , update = updateWithStorage
     , subscriptions = \_ -> Sub.none
     }
 
 
-port setStorage : StorageModel -> Cmd msg
+port setStorage : Storage.Model -> Cmd msg
 
 port focus : String -> Cmd msg
 
-
-{-| We want to `setStorage` on every update. This function adds the setStorage
-command for every step of the update function.
--}
-updateWithStorage : Msg -> Model -> (Model, Cmd a)
-updateWithStorage msg model =
-  let
-    (newModel, cmds) =
-      update msg model
-  in
-    newModel ! [ setStorage (storage newModel), cmds ]
-
--- MODEL
-
-
--- The full application state of our todo app.
-type alias Model =
-  { active : Dict Int (Entry Active)
-  , allCompleted : Bool
-  , completed : Dict Int (Entry Completed)
-  , entriesCompleted : Int
-  , entriesLeft : Int
-  , field : String
-  , noneVisible : Bool
-  , uid : Int
-  , visibility : Visibility
-  }
-
-type alias StorageModel =
-  List StorageEntry
-
-type alias BaseEntry =
-  { description : NonBlankString
-  , editing : Bool
-  }
-
-type alias StorageEntry =
-  { completed : Bool
-  , id : Int
-  , title : String
-  }
-
-type alias Entry state =
-  Tagged state BaseEntry
-
-emptyModel : Model
-emptyModel =
-  { active = Dict.empty
-  , allCompleted = False
-  , completed = Dict.empty
-  , entriesCompleted = 0
-  , entriesLeft = 0
-  , field = ""
-  , noneVisible = True
-  , uid = 0
-  , visibility = all
-  }
-
-allCompleted : Model -> Model
-allCompleted ({active, completed} as model) =
-  {model | allCompleted = Dict.isEmpty active && not (Dict.isEmpty completed)}
-
-entriesCompleted : Model -> Model
-entriesCompleted ({completed} as model) =
-  {model | entriesCompleted = Dict.size completed}
-
-entriesLeft : Model -> Model
-entriesLeft ({active} as model) =
-  {model | entriesLeft = Dict.size active}
-
-noneVisible : Model -> Model
-noneVisible ({active, completed} as model) =
-  {model | noneVisible = Dict.isEmpty active && Dict.isEmpty completed}
-
-uid : Model -> Model
-uid ({active, completed} as model) =
-  { model
-  | uid =
-      Maybe.map2 Basics.max (List.maximum (Dict.keys active)) (List.maximum (Dict.keys completed))
-        |> Maybe.withDefault 0
-        |> (+) 1
-  }
-
-newEntry : String -> Maybe (Entry Active)
-newEntry =
-  entry
-
-entry : String -> Maybe (Entry a)
-entry title =
-  nonBlankString title
-    |> Maybe.map (\str -> tag {description = str, editing = False})
-
-setEntryEditing : Bool -> Entry a -> Entry a
-setEntryEditing editing =
-  Tagged.map (\record -> {record | editing = editing})
-
-setEntryDescription : String -> Entry a -> Maybe (Entry a)
-setEntryDescription str entry =
-  Maybe.map (\non -> Tagged.map (setDescription non) entry) (nonBlankString str)
-
-setDescription : a -> {r | description : b} -> {r | description : a}
-setDescription x record =
-  {record | description = x}
-
-init : Maybe Model -> ( Model, Cmd Msg )
+init : Maybe Storage.Model -> ( Model, Cmd Msg )
 init savedModel =
-  Maybe.withDefault emptyModel savedModel ! []
-
-storage : Model -> StorageModel
-storage ({active, completed, visibility} as model) =
-  storageEntry False active ++ storageEntry True completed
-
-egarots : StorageModel -> Model
-egarots storageModel =
-  let
-    (completed, active) =
-      List.partition .completed storageModel
-  in
-    { emptyModel
-    | active = yrtneEgarots active
-    , completed = yrtneEgarots completed
-    }
-      |> updateDependents
-      |> uid
-
-yrtneEgarots : List StorageEntry -> Dict Int (Entry a)
-yrtneEgarots entries =
-  List.filterMap (\{id, title} -> Maybe.map ((,) id) (entry title)) entries
-    |> Dict.fromList
-
-storageEntry : Bool -> Dict comparable (Entry a) -> List StorageEntry
-storageEntry completed =
-  Dict.values << Dict.map (\id tagged ->
-    { completed = completed
-    , id = id
-    , title = NonBlankString.string (untag tagged).description
-    }
-  )
-
-witness : Dict a (Entry b) -> b -> Dict a (Entry b)
-witness =
-  always
-
+  Maybe.withDefault Model.empty (Maybe.map egarots savedModel) ! []
 
 -- UPDATE
 
@@ -206,15 +71,19 @@ type Msg
 update : Msg -> Model -> ( Model, Cmd a )
 update msg =
   updateCmd msg
-    << updateDependents
+    << dependentFields
     << updateModel msg
 
-updateDependents : Model -> Model
-updateDependents =
-  allCompleted
-  << entriesCompleted
-  << entriesLeft
-  << noneVisible
+{-| We want to `setStorage` on every update. This function adds the setStorage
+command for every step of the update function.
+-}
+updateWithStorage : Msg -> Model -> (Model, Cmd a)
+updateWithStorage msg model =
+  let
+    (newModel, cmds) =
+      update msg model
+  in
+    newModel ! [ setStorage (storage newModel), cmds ]
 
 updateModel : Msg -> Model -> Model
 updateModel msg ({active, completed, uid, field} as model) =
@@ -227,14 +96,14 @@ updateModel msg ({active, completed, uid, field} as model) =
 
     EditingEntry id ->
       { model
-        | active = Dict.update id (Maybe.map (setEntryEditing True)) active
-        , completed = Dict.update id (Maybe.map (setEntryEditing True)) completed
+        | active = Dict.update id (Maybe.map (setEditing True)) active
+        , completed = Dict.update id (Maybe.map (setEditing True)) completed
       }
 
     UpdateEntry id task ->
       { model
-        | active = Dict.update id (flip Maybe.andThen (setEntryDescription task << setEntryEditing False)) active
-        , completed = Dict.update id (flip Maybe.andThen (setEntryDescription task << setEntryEditing False)) completed
+        | active = Dict.update id (flip Maybe.andThen (setDescription task << setEditing False)) active
+        , completed = Dict.update id (flip Maybe.andThen (setDescription task << setEditing False)) completed
       }
 
     Delete id ->
@@ -347,6 +216,9 @@ viewEntries {active, allCompleted, noneVisible, completed, visibility} =
         )
     ]
 
+witness : Dict a (Entry b) -> b -> Dict a (Entry b)
+witness =
+  always
 
 -- VIEW INDIVIDUAL ENTRIES
 
