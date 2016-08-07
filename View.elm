@@ -5,7 +5,7 @@ import Html exposing (..)
 import Html.Attributes exposing (..)
 import Html.Events exposing (..)
 import Html.Keyed as Keyed
-import Html.Lazy exposing (lazy, lazy2)
+import Html.Lazy exposing (lazy, lazy3)
 import Json.Decode as Json
 
 import Model exposing (BaseEntry, Entry, Model)
@@ -58,7 +58,7 @@ viewInput task =
 -- VIEW ALL ENTRIES
 
 viewEntries : Model -> Html Msg
-viewEntries {active, allCompleted, noneVisible, completed, visibility} =
+viewEntries {active, allCompleted, completed, editing, noneVisible, visibility} =
   section
     [ class "main"
     , style [ ("visibility", if noneVisible then "hidden" else "visible") ]
@@ -77,7 +77,7 @@ viewEntries {active, allCompleted, noneVisible, completed, visibility} =
     , Keyed.ul [ class "todo-list" ]
         (visibility
           |> These.bimap (witness active) (witness completed)
-          |> These.bimap (Dict.map (lazy2 viewActive)) (Dict.map (lazy2 viewCompleted))
+          |> These.bimap (Dict.map (lazy3 viewActive editing)) (Dict.map (lazy3 viewCompleted editing))
           |> these identity identity Dict.union
           |> viewKeyedEntries
         )
@@ -94,18 +94,18 @@ viewKeyedEntries : Dict comparable a -> List (String, a)
 viewKeyedEntries =
   Dict.foldr (\id todo todos-> (toString id, todo) :: todos) []
 
-viewActive : Int -> Entry Active -> Html Msg
-viewActive id entry =
-  viewEntry False id (untag entry)
+viewActive : Maybe Int -> Int -> Entry Active -> Html Msg
+viewActive editing id entry =
+  viewEntry editing False id (untag entry)
 
-viewCompleted : Int -> Entry Completed -> Html Msg
-viewCompleted id entry =
-  viewEntry True id (untag entry)
+viewCompleted : Maybe Int -> Int -> Entry Completed -> Html Msg
+viewCompleted editing id entry =
+  viewEntry editing True id (untag entry)
 
-viewEntry : Bool -> Int -> BaseEntry -> Html Msg
-viewEntry bool todoId todo =
+viewEntry : Maybe Int -> Bool -> Int -> BaseEntry -> Html Msg
+viewEntry editing bool todoId todo =
   li
-    [ classList [ ("completed", bool), ("editing", todo.editing) ] ]
+    [ classList [ ("completed", bool), ("editing", Just todoId == editing) ] ]
     [ div
         [ class "view" ]
         [ input

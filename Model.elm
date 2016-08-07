@@ -1,7 +1,6 @@
 module Model exposing
   ( BaseEntry, Entry, Model
-  , dependentFields, empty, entry, newEntry, setDescription, setEditing
-  , uid
+  , dependentFields, empty, entry, newEntry, setDescription, uid
   )
 
 import Dict exposing (Dict)
@@ -14,6 +13,7 @@ type alias Model =
   { active : Dict Int (Entry Active)
   , allCompleted : Bool
   , completed : Dict Int (Entry Completed)
+  , editing : Maybe Int
   , entriesCompleted : Int
   , entriesLeft : Int
   , field : String
@@ -24,7 +24,6 @@ type alias Model =
 
 type alias BaseEntry =
   { description : NonBlankString
-  , editing : Bool
   }
 
 type alias Entry visibility =
@@ -35,6 +34,7 @@ empty =
   { active = Dict.empty
   , allCompleted = False
   , completed = Dict.empty
+  , editing = Nothing
   , entriesCompleted = 0
   , entriesLeft = 0
   , field = ""
@@ -50,7 +50,7 @@ newEntry =
 entry : String -> Maybe (Entry a)
 entry title =
   nonBlankString title
-    |> Maybe.map (\str -> tag {description = str, editing = False})
+    |> Maybe.map (\str -> tag {description = str})
 
 dependentFields : Model -> Model
 dependentFields =
@@ -84,10 +84,6 @@ uid ({active, completed} as model) =
         |> Maybe.withDefault 0
         |> (+) 1
   }
-
-setEditing : Bool -> Entry a -> Entry a
-setEditing editing =
-  Tagged.map (\record -> {record | editing = editing})
 
 setDescription : String -> Entry a -> Maybe (Entry a)
 setDescription str entry =

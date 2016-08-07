@@ -2,10 +2,7 @@ module Update exposing (Msg(..), updateWithStorage)
 
 import Dict exposing (Dict)
 
-import Model exposing
-  ( Entry, Model
-  , dependentFields, newEntry, setDescription, setEditing
-  )
+import Model exposing (Entry, Model, dependentFields, newEntry, setDescription)
 import Storage exposing (storage)
 import Tagged exposing (retag)
 import Visibility exposing (Visibility)
@@ -55,15 +52,13 @@ updateModel msg ({active, completed, uid, field} as model) =
       { model | field = str }
 
     EditingEntry id ->
-      { model
-      | active = Dict.update id (Maybe.map (setEditing True)) active
-      , completed = Dict.update id (Maybe.map (setEditing True)) completed
-      }
+      { model | editing = Just id }
 
     UpdateEntry id task ->
       { model
       | active = updateEntry id task active
       , completed = updateEntry id task completed
+      , editing = Nothing
       }
 
     Delete id ->
@@ -115,4 +110,4 @@ updateCmd focus msg x =
 
 updateEntry : comparable -> String -> Dict comparable (Entry a) -> Dict comparable (Entry a)
 updateEntry id task =
-  Dict.update id (flip Maybe.andThen (setDescription task << setEditing False))
+  Dict.update id (flip Maybe.andThen (setDescription task))
