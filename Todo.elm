@@ -71,14 +71,16 @@ type alias StorageModel =
 type alias Model =
     BaseModel (Dict Int (Entry Active)) (Dict Int (Entry Completed)) Visibility
 
-
-type alias StorageEntry =
-    { description : String
+type alias BaseEntry description =
+    { description : description
     , editing : Bool
     }
 
+type alias StorageEntry =
+  BaseEntry String
+
 type alias Entry state =
-  Tagged state StorageEntry
+  Tagged state (BaseEntry NonBlankString)
 
 type Active
   = Active
@@ -98,32 +100,37 @@ emptyModel =
   , uid = 0
   }
 
-newEntry : String -> Entry Active
+newEntry : String -> Maybe (Entry Active)
 newEntry desc =
   entry
     { description = desc
     , editing = False
     }
 
-entry : StorageEntry -> Entry a
-entry =
-  Tagged
+entry : StorageEntry -> Maybe (Entry a)
+entry storageEntry =
+  nonEmptyString storageEntry.description
+    |> Maybe.map (\str -> Tagged (setDescription str storageEntry))
 
 setEntryEditing : Bool -> Entry a -> Entry a
 setEntryEditing =
   taggedMap << setEditing
 
-setEntryDescription : String -> Entry a -> Entry a
-setEntryDescription =
-  taggedMap << setDescription
+setEntryDescription : String -> Entry a -> Maybe (Entry a)
+setEntryDescription str entry =
+  Maybe.map (flip taggedMap entry << setDescription) (nonEmptyString str)
 
 setEditing : a -> {r | editing : b} -> {r | editing : a}
 setEditing editing record =
   {record | editing = editing}
 
+mapDescription : (a -> b) -> {r | description : a} -> {r | description : b}
+mapDescription f ({description} as record) =
+  {record | description = f description}
+
 setDescription : a -> {r | description : b} -> {r | description : a}
-setDescription description record =
-  {record | description = description}
+setDescription description =
+  mapDescription (\_ -> description)
 
 init : Maybe Model -> ( Model, Cmd Msg )
 init savedModel =
@@ -135,23 +142,31 @@ storage
 storage ({active, completed, visibility} as model) =
   { model
   | visibility = visibilityString visibility
-  , active = Dict.map (\_ -> taggedExtract) active |> Dict.toList
-  , completed = Dict.map (\_ -> taggedExtract) completed |> Dict.toList
+  , active =
+      active
+        |> Dict.map (\_ -> mapDescription string << taggedExtract)
+        |> Dict.toList
+  , completed =
+      completed
+        |> Dict.map (\_ -> mapDescription string << taggedExtract)
+        |> Dict.toList
   }
 
 egarots
   :         BaseModel (List (comparable, StorageEntry)) (List (comparable, StorageEntry)) String
   -> Maybe (BaseModel (Dict  comparable      (Entry a)) (Dict  comparable      (Entry b)) Visibility)
 egarots ({active, completed, visibility} as model) =
-  let
-    go v =
-      { model
-      | visibility = v
-      , active = Dict.fromList active |> Dict.map (\_ -> entry)
-      , completed = Dict.fromList completed |> Dict.map (\_ -> entry)
-      }
-  in
-    Maybe.map go (parseVisibility visibility)
+  Just
+    { model
+    | visibility =
+        Maybe.withDefault (These Active Completed) (parseVisibility visibility)
+    , active =
+        List.filterMap (\(x, y) -> Maybe.map ((,) x) (entry y)) active
+          |> Dict.fromList
+    , completed =
+        List.filterMap (\(x, y) -> Maybe.map ((,) x) (entry y)) completed
+          |> Dict.fromList
+    }
 
 parseVisibility : String -> Maybe Visibility
 parseVisibility str =
@@ -168,6 +183,21 @@ parseVisibility str =
 visibilityString : Visibility -> String
 visibilityString =
   these toString toString (\_ _ -> "All")
+
+type NonBlankString
+  = NonBlankString String
+
+nonEmptyString : String -> Maybe NonBlankString
+nonEmptyString rawString =
+  case String.trim rawString of
+    "" ->
+      Nothing
+    str ->
+      Just (NonBlankString str)
+
+string : NonBlankString -> String
+string (NonBlankString str) =
+  str
 
 type Tagged tag value
   = Tagged value
@@ -229,7 +259,7 @@ to them.
 type Msg
     = NoOp
     | UpdateField String
-    | EditingEntry Int Bool
+    | EditingEntry Int
     | UpdateEntry Int String
     | Add
     | Delete Int
@@ -251,7 +281,9 @@ update msg model =
         | uid = model.uid + 1
         , field = ""
         , active =
-            Dict.insert model.uid (newEntry model.field) model.active
+            newEntry model.field
+              |> Maybe.map (\entry -> Dict.insert model.uid entry model.active)
+              |> Maybe.withDefault model.active
       }
         ! []
 
@@ -259,17 +291,17 @@ update msg model =
       { model | field = str }
         ! []
 
-    EditingEntry id isEditing ->
+    EditingEntry id ->
       { model
-        | active = Dict.update id (Maybe.map (setEntryEditing isEditing)) model.active
-        , completed = Dict.update id (Maybe.map (setEntryEditing isEditing)) model.completed
+        | active = Dict.update id (Maybe.map (setEntryEditing True)) model.active
+        , completed = Dict.update id (Maybe.map (setEntryEditing True)) model.completed
       }
         ! [ focus ("#todo-" ++ toString id) ]
 
     UpdateEntry id task ->
       { model
-        | active = Dict.update id (Maybe.map (setEntryDescription task)) model.active
-        , completed = Dict.update id (Maybe.map (setEntryDescription task)) model.completed
+        | active = Dict.update id (Maybe.map (setEntryEditing False) << flip Maybe.andThen (setEntryDescription task)) model.active
+        , completed = Dict.update id (Maybe.map (setEntryEditing False) << flip Maybe.andThen (setEntryDescription task)) model.completed
       }
         ! []
 
@@ -357,30 +389,28 @@ viewInput task =
         , value task
         , name "newTodo"
         , onInput UpdateField
-        , onEnter (if String.isEmpty task then NoOp else Add)
+        , on "keydown" (Json.map (whenEnter Add) keyCode)
         ]
         []
     ]
 
-
-onEnter : Msg -> Attribute Msg
-onEnter msg =
-  let
-    tagger code =
-      if code == 13 then msg else NoOp
-  in
-    on "keydown" (Json.map tagger keyCode)
-
+whenEnter : Msg -> number -> Msg
+whenEnter msg code =
+  if code == 13 then msg else NoOp
 
 
 -- VIEW ALL ENTRIES
+
+witness : Dict Int (Entry a) -> a -> Dict Int (Entry a)
+witness active _ =
+  active
 
 viewEntries : Model -> Html Msg
 viewEntries ({active, completed, visibility} as model) =
   let
     visible =
       visibility
-        |> theseBimap (\_ -> active) (\_ -> completed)
+        |> theseBimap (witness active) (witness completed)
         |> theseBimap (Dict.map (lazy2 viewActive)) (Dict.map (lazy2 viewCompleted))
         |> these identity identity Dict.union
 
@@ -428,7 +458,7 @@ viewCompleted : Int -> Entry Completed -> Html Msg
 viewCompleted id =
   viewEntry True id << taggedExtract
 
-viewEntry : Bool -> Int -> StorageEntry -> Html Msg
+viewEntry : Bool -> Int -> BaseEntry NonBlankString -> Html Msg
 viewEntry bool todoId todo =
   li
     [ classList [ ("completed", bool), ("editing", todo.editing) ] ]
@@ -442,8 +472,8 @@ viewEntry bool todoId todo =
             ]
             []
         , label
-            [ onDoubleClick (EditingEntry todoId True) ]
-            [ text todo.description ]
+            [ onDoubleClick (EditingEntry todoId) ]
+            [ text (string todo.description) ]
         , button
             [ class "destroy"
             , onClick (Delete todoId)
@@ -452,12 +482,11 @@ viewEntry bool todoId todo =
         ]
     , input
         [ class "edit"
-        , value todo.description
+        , value (string todo.description)
         , name "title"
         , id ("todo-" ++ toString todoId)
-        , onInput (UpdateEntry todoId)
-        , onBlur (EditingEntry todoId False)
-        , onEnter (EditingEntry todoId False)
+        , on "blur" (Json.map (UpdateEntry todoId) targetValue)
+        , on "keydown" (Json.object2 (whenEnter << UpdateEntry todoId) targetValue keyCode)
         ]
         []
     ]
@@ -467,7 +496,7 @@ viewEntry bool todoId todo =
 -- VIEW CONTROLS AND FOOTER
 
 
-viewControls : Visibility -> Dict a (Entry Active) -> Dict c (Entry Completed) -> Html Msg
+viewControls : Visibility -> Dict a (Entry Active) -> Dict b (Entry Completed) -> Html Msg
 viewControls visibility active completed =
   footer
     [ class "footer"
