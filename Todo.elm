@@ -86,16 +86,14 @@ type Active
 type Completed
   = Completed
 
-type Visibility
-  = AllEntries
-  | ActiveEntries
-  | CompletedEntries
+type alias Visibility =
+  These Active Completed
 
 emptyModel : Model
 emptyModel =
   { active = Dict.empty
   , completed = Dict.empty
-  , visibility = AllEntries
+  , visibility = These Active Completed
   , field = ""
   , uid = 0
   }
@@ -159,32 +157,24 @@ parseVisibility : String -> Maybe Visibility
 parseVisibility str =
   case str of
     "All" ->
-      Just AllEntries
+      Just (These Active Completed)
     "Active" ->
-      Just ActiveEntries
+      Just (This Active)
     "Completed" ->
-      Just CompletedEntries
+      Just (That Completed)
     _ ->
       Nothing
 
 visibilityString : Visibility -> String
-visibilityString visibility =
-  case visibility of
-    AllEntries ->
-      "All"
-    ActiveEntries ->
-      "Active"
-    CompletedEntries ->
-      "Completed"
+visibilityString =
+  these toString toString (\_ _ -> "All")
 
 type Tagged tag value
   = Tagged value
 
 retag : Tagged oldTag value -> Tagged newTag value
-retag tagged =
-  case tagged of
-    Tagged x ->
-      Tagged x
+retag (Tagged x) =
+  Tagged x
 
 taggedMap : (oldValue -> newValue) -> Tagged tag oldValue -> Tagged tag newValue
 taggedMap f entry =
@@ -197,6 +187,37 @@ taggedExtract entry =
   case entry of
     Tagged a ->
       a
+
+type These a b
+  = This a
+  | That b
+  | These a b
+
+these : (a -> c) -> (b -> c) -> (a -> b -> c) -> These a b -> c
+these f g h these =
+  case these of
+    This a ->
+      f a
+    That b ->
+      g b
+    These a b ->
+      h a b
+
+theseMap : (b -> c) -> These a b -> These a c
+theseMap f =
+  these This (That << f) (\a -> These a << f)
+
+theseSet : c -> These a b -> These a c
+theseSet c =
+  theseMap (\_ -> c)
+
+theseBimap : (a -> c) -> (b -> d) -> These a b -> These c d
+theseBimap f g =
+  these (This << f) (That << g) (\a b -> These (f a) (g b))
+
+theseBiset : c -> d -> These a b -> These c d
+theseBiset c d =
+  theseBimap (\_ -> c) (\_ -> d)
 
 -- UPDATE
 
@@ -317,7 +338,7 @@ view model =
     [ section
         [ class "todoapp" ]
         [ lazy viewInput model.field
-        , lazy3 viewEntries model.visibility model.active model.completed
+        , lazy viewEntries model
         , lazy3 viewControls model.visibility model.active model.completed
         ]
     , infoFooter
@@ -354,18 +375,14 @@ onEnter msg =
 
 -- VIEW ALL ENTRIES
 
-
-viewEntries : Visibility -> Dict Int (Entry Active) -> Dict Int (Entry Completed) -> Html Msg
-viewEntries visibility active completed =
+viewEntries : Model -> Html Msg
+viewEntries ({active, completed, visibility} as model) =
   let
     visible =
-      case visibility of
-        CompletedEntries ->
-          Dict.map (lazy2 viewCompleted) completed
-        ActiveEntries ->
-          Dict.map (lazy2 viewActive) active
-        AllEntries ->
-          Dict.union (Dict.map (lazy2 viewActive) active) (Dict.map (lazy2 viewCompleted) completed)
+      visibility
+        |> theseBimap (\_ -> active) (\_ -> completed)
+        |> theseBimap (Dict.map (lazy2 viewActive)) (Dict.map (lazy2 viewCompleted))
+        |> these identity identity Dict.union
 
     allCompleted =
       Dict.isEmpty active
@@ -425,7 +442,7 @@ viewEntry bool todoId todo =
             ]
             []
         , label
-            [ onDoubleClick (EditingEntry todoId bool) ]
+            [ onDoubleClick (EditingEntry todoId True) ]
             [ text todo.description ]
         , button
             [ class "destroy"
@@ -479,11 +496,11 @@ viewControlsFilters : Visibility -> Html Msg
 viewControlsFilters visibility =
   ul
     [ class "filters" ]
-    [ visibilitySwap "#/" AllEntries visibility
+    [ visibilitySwap "#/" (These Active Completed) visibility
     , text " "
-    , visibilitySwap "#/active" ActiveEntries visibility
+    , visibilitySwap "#/active" (This Active) visibility
     , text " "
-    , visibilitySwap "#/completed" CompletedEntries visibility
+    , visibilitySwap "#/completed" (That Completed) visibility
     ]
 
 
