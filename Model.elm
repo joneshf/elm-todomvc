@@ -79,7 +79,8 @@ uid : Model -> Model
 uid ({active, completed} as model) =
   { model
   | uid =
-      Maybe.map2 max (List.maximum (Dict.keys active)) (List.maximum (Dict.keys completed))
+      (Dict.keys active ++ Dict.keys completed)
+        |> List.maximum
         |> Maybe.withDefault 0
         |> (+) 1
   }
