@@ -19,8 +19,8 @@ import Html.Keyed as Keyed
 import Html.Lazy exposing (lazy, lazy2, lazy3)
 import Dict as Dict exposing (Dict)
 import Json.Decode as Json
-import String
 
+import NonBlankString exposing (NonBlankString, nonBlankString)
 import Tagged exposing (Tagged, retag, tag, untag)
 import These exposing (These(..), these)
 
@@ -180,7 +180,10 @@ yrtneEgarots entries =
 storageEntry : Bool -> Dict comparable (Entry a) -> List StorageEntry
 storageEntry completed =
   Dict.values << Dict.map (\id tagged ->
-    { completed = completed, id = id, title = string (untag tagged).description}
+    { completed = completed
+    , id = id
+    , title = NonBlankString.string (untag tagged).description
+    }
   )
 
 witness : Dict a (Entry b) -> b -> Dict a (Entry b)
@@ -190,20 +193,6 @@ witness =
 visibilityString : Visibility -> String
 visibilityString =
   these toString toString (\_ _ -> "All")
-
-type NonBlankString
-  = NonBlankString String
-
-nonBlankString : String -> Maybe NonBlankString
-nonBlankString rawString =
-  if String.trim rawString == "" then
-    Nothing
-  else
-    Just (NonBlankString (String.trim rawString))
-
-string : NonBlankString -> String
-string (NonBlankString str) =
-  str
 
 -- UPDATE
 
@@ -400,7 +389,7 @@ viewEntry bool todoId todo =
             []
         , label
             [ onDoubleClick (EditingEntry todoId) ]
-            [ text (string todo.description) ]
+            [ text (NonBlankString.string todo.description) ]
         , button
             [ class "destroy"
             , onClick (Delete todoId)
@@ -409,14 +398,14 @@ viewEntry bool todoId todo =
         ]
     , input
         [ class "edit"
-        , value (string todo.description)
+        , value (NonBlankString.string todo.description)
         , name "title"
         , id ("todo-" ++ toString todoId)
         , on "blur" (Json.map (UpdateEntry todoId) targetValue)
         , on "keydown" (keyCode `Json.andThen` \code ->
             case code of
               13 -> Json.map (UpdateEntry todoId) targetValue
-              27 -> Json.succeed (UpdateEntry todoId (string todo.description))
+              27 -> Json.succeed (UpdateEntry todoId (NonBlankString.string todo.description))
               _ -> Json.fail "Not <enter> or <esc>"
           )
         ]
