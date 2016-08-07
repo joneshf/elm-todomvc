@@ -8,7 +8,7 @@ import Html.Keyed as Keyed
 import Html.Lazy exposing (lazy, lazy3)
 import Json.Decode as Json
 
-import Model exposing (BaseEntry, Entry, Model)
+import Model exposing (Entry, Model)
 import NonBlankString exposing (NonBlankString)
 import Tagged exposing (untag)
 import These exposing (these)
@@ -102,8 +102,8 @@ viewCompleted : Maybe Int -> Int -> Entry Completed -> Html Msg
 viewCompleted editing id entry =
   viewEntry editing True id (untag entry)
 
-viewEntry : Maybe Int -> Bool -> Int -> BaseEntry -> Html Msg
-viewEntry editing bool todoId todo =
+viewEntry : Maybe Int -> Bool -> Int -> NonBlankString -> Html Msg
+viewEntry editing bool todoId description =
   li
     [ classList [ ("completed", bool), ("editing", Just todoId == editing) ] ]
     [ div
@@ -117,7 +117,7 @@ viewEntry editing bool todoId todo =
             []
         , label
             [ onDoubleClick (EditingEntry todoId) ]
-            [ text (NonBlankString.string todo.description) ]
+            [ text (NonBlankString.string description) ]
         , button
             [ class "destroy"
             , onClick (Delete todoId)
@@ -126,14 +126,14 @@ viewEntry editing bool todoId todo =
         ]
     , input
         [ class "edit"
-        , value (NonBlankString.string todo.description)
+        , value (NonBlankString.string description)
         , name "title"
         , id ("todo-" ++ toString todoId)
         , on "blur" (Json.map (UpdateEntry todoId) targetValue)
         , on "keydown" (keyCode `Json.andThen` \code ->
             case code of
               13 -> Json.map (UpdateEntry todoId) targetValue
-              27 -> Json.succeed (UpdateEntry todoId (NonBlankString.string todo.description))
+              27 -> Json.succeed (UpdateEntry todoId (NonBlankString.string description))
               _ -> Json.fail "Not <enter> or <esc>"
           )
         ]
@@ -203,6 +203,10 @@ infoFooter =
     , p []
         [ text "Written by "
         , a [ href "https://github.com/evancz" ] [ text "Evan Czaplicki" ]
+        ]
+    , p []
+        [ text "Additions by "
+        , a [ href "https://github.com/joneshf" ] [ text "Hardy Jones" ]
         ]
     , p []
         [ text "Part of "

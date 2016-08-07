@@ -1,5 +1,5 @@
 module Model exposing
-  ( BaseEntry, Entry, Model
+  ( Entry, Model
   , dependentFields, empty, entry, newEntry, setDescription, uid
   )
 
@@ -22,12 +22,8 @@ type alias Model =
   , visibility : Visibility
   }
 
-type alias BaseEntry =
-  { description : NonBlankString
-  }
-
 type alias Entry visibility =
-  Tagged visibility BaseEntry
+  Tagged visibility NonBlankString
 
 empty : Model
 empty =
@@ -49,8 +45,7 @@ newEntry =
 
 entry : String -> Maybe (Entry a)
 entry title =
-  nonBlankString title
-    |> Maybe.map (\str -> tag {description = str})
+  Maybe.map tag (nonBlankString title)
 
 dependentFields : Model -> Model
 dependentFields =
@@ -86,8 +81,5 @@ uid ({active, completed} as model) =
   }
 
 setDescription : String -> Entry a -> Maybe (Entry a)
-setDescription str entry =
-  nonBlankString str
-    |> Maybe.map (\non ->
-        Tagged.map (\record -> {record | description = non}) entry
-      )
+setDescription str _ =
+  entry str

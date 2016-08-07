@@ -37,7 +37,7 @@ storageEntry completed =
   Dict.values << Dict.map (\id tagged ->
     { completed = completed
     , id = id
-    , title = NonBlankString.string (untag tagged).description
+    , title = NonBlankString.string (untag tagged)
     }
   )
 
