@@ -20,13 +20,11 @@ import Html.Lazy exposing (lazy, lazy2, lazy3)
 import Dict as Dict exposing (Dict)
 import Json.Decode as Json
 
-import Model exposing
-  ( BaseEntry, Entry, Model
-  , dependentFields, newEntry, setDescription, setEditing
-  )
+import Model exposing (BaseEntry, Entry, Model)
 import NonBlankString
-import Storage exposing (storage, egarots)
-import Tagged exposing (retag, untag)
+import Storage exposing (egarots)
+import Update exposing (Msg(..), updateWithStorage)
+import Tagged exposing (untag)
 import These exposing (these)
 import Visibility exposing (Visibility, Active, Completed, all, active, completed)
 
@@ -35,10 +33,9 @@ main =
   App.programWithFlags
     { init = init
     , view = view
-    , update = updateWithStorage
+    , update = updateWithStorage setStorage focus
     , subscriptions = \_ -> Sub.none
     }
-
 
 port setStorage : Storage.Model -> Cmd msg
 
@@ -47,106 +44,6 @@ port focus : String -> Cmd msg
 init : Maybe Storage.Model -> ( Model, Cmd Msg )
 init savedModel =
   Maybe.withDefault Model.empty (Maybe.map egarots savedModel) ! []
-
--- UPDATE
-
-
-{-| Users of our app can trigger messages by clicking and typing. These
-messages are fed into the `update` function as they occur, letting us react
-to them.
--}
-type Msg
-    = UpdateField String
-    | EditingEntry Int
-    | UpdateEntry Int String
-    | Add
-    | Delete Int
-    | DeleteComplete
-    | Check Int Bool
-    | CheckAll Bool
-    | ChangeVisibility Visibility
-
-
--- How we update our Model on a given Msg?
-update : Msg -> Model -> ( Model, Cmd a )
-update msg =
-  updateCmd msg
-    << dependentFields
-    << updateModel msg
-
-{-| We want to `setStorage` on every update. This function adds the setStorage
-command for every step of the update function.
--}
-updateWithStorage : Msg -> Model -> (Model, Cmd a)
-updateWithStorage msg model =
-  let
-    (newModel, cmds) =
-      update msg model
-  in
-    newModel ! [ setStorage (storage newModel), cmds ]
-
-updateModel : Msg -> Model -> Model
-updateModel msg ({active, completed, uid, field} as model) =
-  case msg of
-    Add ->
-      { model | uid = uid + 1, field = "", active = Dict.update uid (\_ -> newEntry field) active }
-
-    UpdateField str ->
-      { model | field = str }
-
-    EditingEntry id ->
-      { model
-        | active = Dict.update id (Maybe.map (setEditing True)) active
-        , completed = Dict.update id (Maybe.map (setEditing True)) completed
-      }
-
-    UpdateEntry id task ->
-      { model
-        | active = Dict.update id (flip Maybe.andThen (setDescription task << setEditing False)) active
-        , completed = Dict.update id (flip Maybe.andThen (setDescription task << setEditing False)) completed
-      }
-
-    Delete id ->
-      { model | active = Dict.remove id active, completed = Dict.remove id completed }
-
-    DeleteComplete ->
-      { model | completed = Dict.empty }
-
-    Check id True ->
-      { model
-        | active = Dict.remove id active
-        , completed = Dict.update id (\_ -> Maybe.map retag (Dict.get id active)) completed
-      }
-
-    Check id False ->
-      { model
-        | active = Dict.update id (\_ -> Maybe.map retag (Dict.get id completed)) active
-        , completed = Dict.remove id completed
-      }
-
-    CheckAll True ->
-      { model
-        | active = Dict.empty
-        , completed = Dict.union (Dict.map (\_ -> retag) active) completed
-      }
-
-    CheckAll False ->
-      { model
-        | active = Dict.union active (Dict.map (\_ -> retag) completed)
-        , completed = Dict.empty
-      }
-
-    ChangeVisibility visibility ->
-      { model | visibility = visibility }
-
-
-updateCmd : Msg -> a -> (a, Cmd b)
-updateCmd msg x =
-  case msg of
-    EditingEntry id ->
-      x ! [ focus ("#todo-" ++ toString id) ]
-    _ ->
-      x ! []
 
 -- VIEW
 
