@@ -57,30 +57,34 @@ updateWithStorage msg model =
 
 
 -- The full application state of our todo app.
-type alias BaseModel active completed visibility =
-    { active : active
-    , completed : completed
+type alias StorageModel =
+    { active : List (Int, StorageEntry)
+    , completed : List (Int, StorageEntry)
     , field : String
     , uid : Int
-    , visibility : visibility
+    , visibility : String
     }
 
-type alias StorageModel =
-    BaseModel (List (Int, StorageEntry)) (List (Int, StorageEntry)) String
-
 type alias Model =
-    BaseModel (Dict Int (Entry Active)) (Dict Int (Entry Completed)) Visibility
+    { active : Dict Int (Entry Active)
+    , completed : Dict Int (Entry Completed)
+    , field : String
+    , uid : Int
+    , visibility : Visibility
+    }
 
-type alias BaseEntry description =
-    { description : description
+type alias BaseEntry =
+    { description : NonBlankString
     , editing : Bool
     }
 
 type alias StorageEntry =
-  BaseEntry String
+    { description : String
+    , editing : Bool
+    }
 
 type alias Entry state =
-  Tagged state (BaseEntry NonBlankString)
+  Tagged state BaseEntry
 
 type Active
   = Active
@@ -129,56 +133,51 @@ mapDescription f ({description} as record) =
   {record | description = f description}
 
 setDescription : a -> {r | description : b} -> {r | description : a}
-setDescription description =
-  mapDescription (\_ -> description)
+setDescription =
+  mapDescription << always
 
 init : Maybe Model -> ( Model, Cmd Msg )
 init savedModel =
   Maybe.withDefault emptyModel savedModel ! []
 
-storage
-  :  BaseModel (Dict  comparable      (Entry a)) (Dict  comparable      (Entry b)) Visibility
-  -> BaseModel (List (comparable, StorageEntry)) (List (comparable, StorageEntry)) String
+storage : Model -> StorageModel
 storage ({active, completed, visibility} as model) =
   { model
   | visibility = visibilityString visibility
-  , active =
-      active
-        |> Dict.map (\_ -> mapDescription string << taggedExtract)
-        |> Dict.toList
-  , completed =
-      completed
-        |> Dict.map (\_ -> mapDescription string << taggedExtract)
-        |> Dict.toList
+  , active = storageEntry active
+  , completed = storageEntry completed
   }
 
-egarots
-  :         BaseModel (List (comparable, StorageEntry)) (List (comparable, StorageEntry)) String
-  -> Maybe (BaseModel (Dict  comparable      (Entry a)) (Dict  comparable      (Entry b)) Visibility)
+egarots : StorageModel -> Maybe Model
 egarots ({active, completed, visibility} as model) =
   Just
     { model
-    | visibility =
-        Maybe.withDefault (These Active Completed) (parseVisibility visibility)
-    , active =
-        List.filterMap (\(x, y) -> Maybe.map ((,) x) (entry y)) active
-          |> Dict.fromList
-    , completed =
-        List.filterMap (\(x, y) -> Maybe.map ((,) x) (entry y)) completed
-          |> Dict.fromList
+    | visibility = parseVisibility visibility
+    , active = yrtneEgarots active
+    , completed = yrtneEgarots completed
     }
 
-parseVisibility : String -> Maybe Visibility
+yrtneEgarots : List (comparable, StorageEntry) -> Dict comparable (Entry a)
+yrtneEgarots =
+  Dict.fromList << List.filterMap (\(x, y) -> Maybe.map ((,) x) (entry y))
+
+storageEntry : Dict comparable (Entry a) -> List (comparable, StorageEntry)
+storageEntry =
+  Dict.toList << Dict.map (\_ -> mapDescription string << untag)
+
+witness : Dict a (Entry b) -> b -> Dict a (Entry b)
+witness =
+  always
+
+parseVisibility : String -> Visibility
 parseVisibility str =
   case str of
-    "All" ->
-      Just (These Active Completed)
     "Active" ->
-      Just (This Active)
+      This Active
     "Completed" ->
-      Just (That Completed)
+      That Completed
     _ ->
-      Nothing
+      These Active Completed
 
 visibilityString : Visibility -> String
 visibilityString =
@@ -212,8 +211,8 @@ taggedMap f entry =
     Tagged todo ->
       Tagged (f todo)
 
-taggedExtract : Tagged tag value -> value
-taggedExtract entry =
+untag : Tagged tag value -> value
+untag entry =
   case entry of
     Tagged a ->
       a
@@ -233,21 +232,9 @@ these f g h these =
     These a b ->
       h a b
 
-theseMap : (b -> c) -> These a b -> These a c
-theseMap f =
-  these This (That << f) (\a -> These a << f)
-
-theseSet : c -> These a b -> These a c
-theseSet c =
-  theseMap (\_ -> c)
-
 theseBimap : (a -> c) -> (b -> d) -> These a b -> These c d
 theseBimap f g =
   these (This << f) (That << g) (\a b -> These (f a) (g b))
-
-theseBiset : c -> d -> These a b -> These c d
-theseBiset c d =
-  theseBimap (\_ -> c) (\_ -> d)
 
 -- UPDATE
 
@@ -300,8 +287,8 @@ update msg model =
 
     UpdateEntry id task ->
       { model
-        | active = Dict.update id (Maybe.map (setEntryEditing False) << flip Maybe.andThen (setEntryDescription task)) model.active
-        , completed = Dict.update id (Maybe.map (setEntryEditing False) << flip Maybe.andThen (setEntryDescription task)) model.completed
+        | active = Dict.update id (flip Maybe.andThen (setEntryDescription task << setEntryEditing False)) model.active
+        , completed = Dict.update id (flip Maybe.andThen (setEntryDescription task << setEntryEditing False)) model.completed
       }
         ! []
 
@@ -401,10 +388,6 @@ whenEnter msg code =
 
 -- VIEW ALL ENTRIES
 
-witness : Dict Int (Entry a) -> a -> Dict Int (Entry a)
-witness active _ =
-  active
-
 viewEntries : Model -> Html Msg
 viewEntries ({active, completed, visibility} as model) =
   let
@@ -452,13 +435,13 @@ viewKeyedEntries =
 
 viewActive : Int -> Entry Active -> Html Msg
 viewActive id =
-  viewEntry False id << taggedExtract
+  viewEntry False id << untag
 
 viewCompleted : Int -> Entry Completed -> Html Msg
 viewCompleted id =
-  viewEntry True id << taggedExtract
+  viewEntry True id << untag
 
-viewEntry : Bool -> Int -> BaseEntry NonBlankString -> Html Msg
+viewEntry : Bool -> Int -> BaseEntry -> Html Msg
 viewEntry bool todoId todo =
   li
     [ classList [ ("completed", bool), ("editing", todo.editing) ] ]
