@@ -41,17 +41,13 @@ port focus : String -> Cmd msg
 {-| We want to `setStorage` on every update. This function adds the setStorage
 command for every step of the update function.
 -}
-updateWithStorage : Msg -> Model -> (Model, Cmd Msg)
+updateWithStorage : Msg -> Model -> (Model, Cmd a)
 updateWithStorage msg model =
   let
     (newModel, cmds) =
       update msg model
   in
-    ( newModel
-    , Cmd.batch [ setStorage (storage newModel), cmds ]
-    )
-
-
+    newModel ! [ setStorage (storage newModel), cmds ]
 
 -- MODEL
 
@@ -134,37 +130,25 @@ uid ({active, completed} as model) =
   }
 
 newEntry : String -> Maybe (Entry Active)
-newEntry desc =
+newEntry =
   entry
-    { completed = False
-    , id = 0
-    , title = desc
-    }
 
-entry : StorageEntry -> Maybe (Entry a)
-entry storageEntry =
-  nonBlankString storageEntry.title
+entry : String -> Maybe (Entry a)
+entry title =
+  nonBlankString title
     |> Maybe.map (\str -> Tagged {description = str, editing = False})
 
 setEntryEditing : Bool -> Entry a -> Entry a
-setEntryEditing =
-  taggedMap << setEditing
+setEntryEditing editing =
+  taggedMap (\record -> {record | editing = editing})
 
 setEntryDescription : String -> Entry a -> Maybe (Entry a)
 setEntryDescription str entry =
-  Maybe.map (flip taggedMap entry << setDescription) (nonBlankString str)
-
-setEditing : a -> {r | editing : b} -> {r | editing : a}
-setEditing editing record =
-  {record | editing = editing}
-
-mapDescription : (a -> b) -> {r | description : a} -> {r | description : b}
-mapDescription f ({description} as record) =
-  {record | description = f description}
+  Maybe.map (\non -> taggedMap (setDescription non) entry) (nonBlankString str)
 
 setDescription : a -> {r | description : b} -> {r | description : a}
-setDescription =
-  mapDescription << always
+setDescription x record =
+  {record | description = x}
 
 init : Maybe Model -> ( Model, Cmd Msg )
 init savedModel =
@@ -188,8 +172,9 @@ egarots storageModel =
       |> uid
 
 yrtneEgarots : List StorageEntry -> Dict Int (Entry a)
-yrtneEgarots =
-  Dict.fromList << List.filterMap (\y -> Maybe.map ((,) y.id) (entry y))
+yrtneEgarots entries =
+  List.filterMap (\{id, title} -> Maybe.map ((,) id) (entry title)) entries
+    |> Dict.fromList
 
 storageEntry : Bool -> Dict comparable (Entry a) -> List StorageEntry
 storageEntry completed =
@@ -201,16 +186,6 @@ witness : Dict a (Entry b) -> b -> Dict a (Entry b)
 witness =
   always
 
-parseVisibility : String -> Visibility
-parseVisibility str =
-  case str of
-    "Active" ->
-      This Active
-    "Completed" ->
-      That Completed
-    _ ->
-      These Active Completed
-
 visibilityString : Visibility -> String
 visibilityString =
   these toString toString (\_ _ -> "All")
@@ -220,11 +195,10 @@ type NonBlankString
 
 nonBlankString : String -> Maybe NonBlankString
 nonBlankString rawString =
-  case String.trim rawString of
-    "" ->
-      Nothing
-    str ->
-      Just (NonBlankString str)
+  if String.trim rawString == "" then
+    Nothing
+  else
+    Just (NonBlankString (String.trim rawString))
 
 string : NonBlankString -> String
 string (NonBlankString str) =
@@ -276,8 +250,7 @@ messages are fed into the `update` function as they occur, letting us react
 to them.
 -}
 type Msg
-    = NoOp
-    | UpdateField String
+    = UpdateField String
     | EditingEntry Int
     | UpdateEntry Int String
     | Add
@@ -289,7 +262,7 @@ type Msg
 
 
 -- How we update our Model on a given Msg?
-update : Msg -> Model -> ( Model, Cmd Msg )
+update : Msg -> Model -> ( Model, Cmd a )
 update msg =
   updateCmd msg
     << updateDependents
@@ -303,20 +276,10 @@ updateDependents =
   << noneVisible
 
 updateModel : Msg -> Model -> Model
-updateModel msg ({active, completed} as model) =
+updateModel msg ({active, completed, uid, field} as model) =
   case msg of
-    NoOp ->
-      model
-
     Add ->
-      { model
-        | uid = model.uid + 1
-        , field = ""
-        , active =
-            newEntry model.field
-              |> Maybe.map (\entry -> Dict.insert model.uid entry active)
-              |> Maybe.withDefault active
-      }
+      { model | uid = uid + 1, field = "", active = Dict.update uid (\_ -> newEntry field) active }
 
     UpdateField str ->
       { model | field = str }
@@ -334,33 +297,22 @@ updateModel msg ({active, completed} as model) =
       }
 
     Delete id ->
-      { model
-        | active = Dict.remove id active
-        , completed = Dict.remove id completed
-      }
+      { model | active = Dict.remove id active, completed = Dict.remove id completed }
 
     DeleteComplete ->
       { model | completed = Dict.empty }
 
     Check id True ->
-      let
-        entry =
-          Maybe.map (Dict.singleton id << retag) (Dict.get id active)
-      in
-        { model
-          | active = Dict.remove id active
-          , completed = Dict.union (Maybe.withDefault Dict.empty entry) completed
-        }
+      { model
+        | active = Dict.remove id active
+        , completed = Dict.update id (\_ -> Maybe.map retag (Dict.get id active)) completed
+      }
 
     Check id False ->
-      let
-        entry =
-          Maybe.map (Dict.singleton id << retag) (Dict.get id completed)
-      in
-        { model
-          | active = Dict.union (Maybe.withDefault Dict.empty entry) active
-          , completed = Dict.remove id completed
-        }
+      { model
+        | active = Dict.update id (\_ -> Maybe.map retag (Dict.get id completed)) active
+        , completed = Dict.remove id completed
+      }
 
     CheckAll True ->
       { model
@@ -378,7 +330,7 @@ updateModel msg ({active, completed} as model) =
       { model | visibility = visibility }
 
 
-updateCmd : Msg -> a -> (a, Cmd Msg)
+updateCmd : Msg -> a -> (a, Cmd b)
 updateCmd msg x =
   case msg of
     EditingEntry id ->
@@ -417,44 +369,42 @@ viewInput task =
         , value task
         , name "newTodo"
         , onInput UpdateField
-        , on "keydown" (Json.map (whenEnter Add) keyCode)
+        , on "keydown" (keyCode `Json.andThen` \code ->
+            case code of
+              13 -> Json.succeed Add
+              _ -> Json.fail "Not <enter>"
+          )
         ]
         []
     ]
-
-whenEnter : Msg -> number -> Msg
-whenEnter msg code =
-  if code == 13 then msg else NoOp
 
 -- VIEW ALL ENTRIES
 
 viewEntries : Model -> Html Msg
 viewEntries {active, allCompleted, noneVisible, completed, visibility} =
-  let
-    visible =
-      visibility
-        |> theseBimap (witness active) (witness completed)
-        |> theseBimap (Dict.map (lazy2 viewActive)) (Dict.map (lazy2 viewCompleted))
-        |> these identity identity Dict.union
-  in
-    section
-      [ class "main"
-      , style [ ("visibility", if noneVisible then "hidden" else "visible") ]
-      ]
-      [ input
-          [ class "toggle-all"
-          , type' "checkbox"
-          , name "toggle"
-          , checked allCompleted
-          , onClick (CheckAll (not allCompleted))
-          ]
-          []
-      , label
-          [ for "toggle-all" ]
-          [ text "Mark all as complete" ]
-      , Keyed.ul [ class "todo-list" ] <|
-          viewKeyedEntries visible
-      ]
+  section
+    [ class "main"
+    , style [ ("visibility", if noneVisible then "hidden" else "visible") ]
+    ]
+    [ input
+        [ class "toggle-all"
+        , type' "checkbox"
+        , name "toggle"
+        , checked allCompleted
+        , onClick (CheckAll (not allCompleted))
+        ]
+        []
+    , label
+        [ for "toggle-all" ]
+        [ text "Mark all as complete" ]
+    , Keyed.ul [ class "todo-list" ]
+        (visibility
+          |> theseBimap (witness active) (witness completed)
+          |> theseBimap (Dict.map (lazy2 viewActive)) (Dict.map (lazy2 viewCompleted))
+          |> these identity identity Dict.union
+          |> viewKeyedEntries
+        )
+    ]
 
 
 -- VIEW INDIVIDUAL ENTRIES
@@ -462,15 +412,15 @@ viewEntries {active, allCompleted, noneVisible, completed, visibility} =
 
 viewKeyedEntries : Dict Int a -> List (String, a)
 viewKeyedEntries =
-  Dict.foldr (\id todo -> (::) (toString id, todo)) []
+  Dict.foldr (\id todo todos-> (toString id, todo) :: todos) []
 
 viewActive : Int -> Entry Active -> Html Msg
-viewActive id =
-  viewEntry False id << untag
+viewActive id entry =
+  viewEntry False id (untag entry)
 
 viewCompleted : Int -> Entry Completed -> Html Msg
-viewCompleted id =
-  viewEntry True id << untag
+viewCompleted id entry =
+  viewEntry True id (untag entry)
 
 viewEntry : Bool -> Int -> BaseEntry -> Html Msg
 viewEntry bool todoId todo =
@@ -500,15 +450,12 @@ viewEntry bool todoId todo =
         , name "title"
         , id ("todo-" ++ toString todoId)
         , on "blur" (Json.map (UpdateEntry todoId) targetValue)
-        , on "keydown"(Json.object2 (\value keyCode ->
-            case keyCode of
-              13 ->
-                UpdateEntry todoId value
-              27 ->
-                UpdateEntry todoId (string todo.description)
-              _ ->
-                NoOp
-          ) targetValue keyCode)
+        , on "keydown" (keyCode `Json.andThen` \code ->
+            case code of
+              13 -> Json.map (UpdateEntry todoId) targetValue
+              27 -> Json.succeed (UpdateEntry todoId (string todo.description))
+              _ -> Json.fail "Not <enter> or <esc>"
+          )
         ]
         []
     ]
@@ -530,15 +477,11 @@ viewControls {entriesCompleted, entriesLeft, noneVisible, visibility} =
 
 viewControlsCount : Int -> Html Msg
 viewControlsCount entriesLeft =
-  let
-    item_ =
-      if entriesLeft == 1 then " item" else " items"
-  in
-    span
-      [ class "todo-count" ]
-      [ strong [] [ text (toString entriesLeft) ]
-      , text (item_ ++ " left")
-      ]
+  span
+    [ class "todo-count" ]
+    [ strong [] [ text (toString entriesLeft) ]
+    , text (if entriesLeft == 1 then " item left" else " items left")
+    ]
 
 
 viewControlsFilters : Visibility -> Html Msg
