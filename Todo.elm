@@ -23,6 +23,7 @@ import Json.Decode as Json
 import NonBlankString exposing (NonBlankString, nonBlankString)
 import Tagged exposing (Tagged, retag, tag, untag)
 import These exposing (These(..), these)
+import Visibility exposing (Visibility, Active, Completed, all, active, completed)
 
 main : Program (Maybe StorageModel)
 main =
@@ -83,15 +84,6 @@ type alias StorageEntry =
 type alias Entry state =
   Tagged state BaseEntry
 
-type Active
-  = Active
-
-type Completed
-  = Completed
-
-type alias Visibility =
-  These Active Completed
-
 emptyModel : Model
 emptyModel =
   { active = Dict.empty
@@ -102,7 +94,7 @@ emptyModel =
   , field = ""
   , noneVisible = True
   , uid = 0
-  , visibility = These Active Completed
+  , visibility = all
   }
 
 allCompleted : Model -> Model
@@ -190,9 +182,6 @@ witness : Dict a (Entry b) -> b -> Dict a (Entry b)
 witness =
   always
 
-visibilityString : Visibility -> String
-visibilityString =
-  these toString toString (\_ _ -> "All")
 
 -- UPDATE
 
@@ -440,11 +429,11 @@ viewControlsFilters : Visibility -> Html Msg
 viewControlsFilters visibility =
   ul
     [ class "filters" ]
-    [ visibilitySwap "#/" (These Active Completed) visibility
+    [ visibilitySwap "#/" all visibility
     , text " "
-    , visibilitySwap "#/active" (This Active) visibility
+    , visibilitySwap "#/active" active visibility
     , text " "
-    , visibilitySwap "#/completed" (That Completed) visibility
+    , visibilitySwap "#/completed" completed visibility
     ]
 
 
@@ -453,7 +442,7 @@ visibilitySwap uri visibility actualVisibility =
   li
     [ onClick (ChangeVisibility visibility) ]
     [ a [ href uri, classList [("selected", visibility == actualVisibility)] ]
-        [ text (visibilityString visibility) ]
+        [ text (Visibility.string visibility) ]
     ]
 
 
