@@ -21,7 +21,7 @@ import Dict as Dict exposing (Dict)
 import Json.Decode as Json
 import String
 
-
+import These exposing (These(..), these)
 
 main : Program (Maybe StorageModel)
 main =
@@ -223,25 +223,6 @@ untag entry =
     Tagged a ->
       a
 
-type These a b
-  = This a
-  | That b
-  | These a b
-
-these : (a -> c) -> (b -> c) -> (a -> b -> c) -> These a b -> c
-these f g h these =
-  case these of
-    This a ->
-      f a
-    That b ->
-      g b
-    These a b ->
-      h a b
-
-theseBimap : (a -> c) -> (b -> d) -> These a b -> These c d
-theseBimap f g =
-  these (This << f) (That << g) (\a b -> These (f a) (g b))
-
 -- UPDATE
 
 
@@ -399,8 +380,8 @@ viewEntries {active, allCompleted, noneVisible, completed, visibility} =
         [ text "Mark all as complete" ]
     , Keyed.ul [ class "todo-list" ]
         (visibility
-          |> theseBimap (witness active) (witness completed)
-          |> theseBimap (Dict.map (lazy2 viewActive)) (Dict.map (lazy2 viewCompleted))
+          |> These.bimap (witness active) (witness completed)
+          |> These.bimap (Dict.map (lazy2 viewActive)) (Dict.map (lazy2 viewCompleted))
           |> these identity identity Dict.union
           |> viewKeyedEntries
         )
